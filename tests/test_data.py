@@ -1,7 +1,6 @@
 """Tests for data ingestion and preprocessing."""
 
 import numpy as np
-import pytest
 
 from mlops_canary_pipeline.data.ingest import generate_fraud_dataset
 from mlops_canary_pipeline.data.preprocess import preprocess

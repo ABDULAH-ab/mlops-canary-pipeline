@@ -12,7 +12,6 @@ Usage:
 from __future__ import annotations
 
 import logging
-import os
 import time
 from pathlib import Path
 
@@ -21,7 +20,6 @@ import numpy as np
 from sklearn.metrics import (
     accuracy_score,
     classification_report,
-    confusion_matrix,
     f1_score,
     precision_score,
     recall_score,

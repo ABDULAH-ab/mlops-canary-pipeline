@@ -19,7 +19,6 @@ from pathlib import Path
 import joblib
 import mlflow
 import mlflow.sklearn
-import numpy as np
 from sklearn.metrics import (
     accuracy_score,
     f1_score,
@@ -159,7 +158,6 @@ def run_training_pipeline() -> dict:
     ]
     best_baseline_f1 = -1.0
     best_baseline_model = None
-    best_baseline_params: dict = {}
 
     for i, cfg in enumerate(xgb_configs, 1):
         logger.info("Training XGBoost run %d/%d  %s", i, len(xgb_configs), cfg)
@@ -184,7 +182,6 @@ def run_training_pipeline() -> dict:
         if val_metrics["f1"] > best_baseline_f1:
             best_baseline_f1 = val_metrics["f1"]
             best_baseline_model = model
-            best_baseline_params = params
             results["baseline_val"] = val_metrics
             results["baseline_test"] = test_metrics
 
@@ -198,7 +195,6 @@ def run_training_pipeline() -> dict:
     ]
     best_candidate_f1 = -1.0
     best_candidate_model = None
-    best_candidate_params: dict = {}
 
     for i, cfg in enumerate(lgb_configs, 1):
         logger.info("Training LightGBM run %d/%d  %s", i, len(lgb_configs), cfg)
@@ -223,7 +219,6 @@ def run_training_pipeline() -> dict:
         if val_metrics["f1"] > best_candidate_f1:
             best_candidate_f1 = val_metrics["f1"]
             best_candidate_model = model
-            best_candidate_params = params
             results["candidate_val"] = val_metrics
             results["candidate_test"] = test_metrics
 

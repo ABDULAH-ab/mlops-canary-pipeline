@@ -1,6 +1,5 @@
 """Tests for the FastAPI application and canary endpoints."""
 
-import os
 
 import pytest
 from fastapi.testclient import TestClient

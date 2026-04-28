@@ -1,6 +1,5 @@
 """Tests for the canary Decision Engine and KPI module."""
 
-import numpy as np
 import pytest
 
 from mlops_canary_pipeline.canary.config import CanaryConfig, DeploymentAction, KPIThreshold
