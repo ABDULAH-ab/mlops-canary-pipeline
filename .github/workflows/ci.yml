@@ -1,4 +1,4 @@
-name: CI — Canary Pipeline
+name: CI - Canary Pipeline
 
 on:
   push:
@@ -25,10 +25,12 @@ jobs:
           pip install -e ".[dev]"
 
       - name: Lint with ruff
-        run: ruff check src/ tests/
+        run: |
+          ruff --version
+          ruff check src/ tests/
 
       - name: Run tests
-        run: pytest -v --tb=short
+        run: pytest -v --tb=long
 
   train:
     needs: test

@@ -81,7 +81,7 @@ class TestKPICollector:
         c = KPISnapshot(n_samples=100, precision=0.5)  # dramatically different
         chi2, p, sig = collector.chi_squared_test(b, c)
         assert chi2 > 0
-        assert sig == True  # should be significant  # noqa: E712
+        assert bool(sig)  # should be significant
 
     def test_ttd_measurement(self, collector):
         assert collector.ttd_seconds is None

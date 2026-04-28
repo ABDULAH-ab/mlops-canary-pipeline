@@ -219,7 +219,7 @@ __marimo__/
 .streamlit/secrets.toml
 
 # Project-specific
-data/
+/data/
 models/
 mlruns/
 mlflow-data/
