@@ -1,0 +1,68 @@
+# Prometheus Alert Rules — Tiered KPI Alerting
+#
+# Improvement over Gaddam (2023) §5.3.4:
+# The paper's Prometheus setup fired too many alerts during normal metric
+# oscillations.  We implement three severity tiers (critical / warning / info)
+# so that only statistically meaningful degradation triggers paging.
+
+groups:
+  - name: canary_kpi_alerts
+    rules:
+
+      # ─── CRITICAL: candidate precision dropped below lower bound ──────
+      - alert: CandidatePrecisionCritical
+        expr: canary_kpi_value{model_version="candidate", kpi_name="precision"} < 0.906
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Candidate precision critically low"
+          description: >
+            Candidate model precision {{ $value | printf "%.4f" }} is below
+            the ±2σ lower bound (0.906) for more than 2 minutes.
+            Rollback is recommended.
+
+      # ─── WARNING: candidate precision trending down ──────────────────
+      - alert: CandidatePrecisionWarning
+        expr: |
+          canary_kpi_value{model_version="candidate", kpi_name="precision"}
+          < canary_kpi_value{model_version="baseline", kpi_name="precision"} * 0.97
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Candidate precision trailing baseline by >3%"
+          description: >
+            Candidate precision {{ $value | printf "%.4f" }} is more than 3%
+            below baseline for 5+ minutes.
+
+      # ─── CRITICAL: latency spike ──────────────────────────────────────
+      - alert: CandidateLatencyCritical
+        expr: canary_kpi_value{model_version="candidate", kpi_name="latency_ms"} > 95
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Candidate latency above 95ms threshold"
+          description: >
+            Candidate p95 latency {{ $value | printf "%.1f" }}ms exceeds the
+            ±2σ upper bound (95ms) from Table 2.
+
+      # ─── INFO: rollback occurred ─────────────────────────────────────
+      - alert: RollbackOccurred
+        expr: increase(canary_rollback_total[5m]) > 0
+        labels:
+          severity: info
+        annotations:
+          summary: "Canary rollback executed"
+          description: >
+            A rollback event was recorded in the last 5 minutes.
+            Check /canary/status for details.
+
+      # ─── INFO: traffic fully promoted ────────────────────────────────
+      - alert: CanaryFullyPromoted
+        expr: canary_traffic_split_pct == 100
+        labels:
+          severity: info
+        annotations:
+          summary: "Candidate model fully promoted to 100% traffic"

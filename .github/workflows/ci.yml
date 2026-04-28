@@ -1,0 +1,93 @@
+name: CI — Canary Pipeline
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Lint with ruff
+        run: ruff check src/ tests/
+
+      - name: Run tests
+        run: pytest -v --tb=short
+
+  train:
+    needs: test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e "."
+
+      - name: Generate dataset
+        run: python -m mlops_canary_pipeline.data.ingest
+
+      - name: Train baseline and candidate models
+        env:
+          MLFLOW_TRACKING_URI: ""
+        run: python -m mlops_canary_pipeline.training.train
+
+      - name: Evaluate models
+        run: python -m mlops_canary_pipeline.training.evaluate
+
+      - name: Upload model artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: trained-models
+          path: models/
+
+  docker:
+    needs: train
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Download model artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: trained-models
+          path: models/
+
+      - name: Build Docker image
+        run: docker build -t mlops-canary-pipeline:${{ github.sha }} .
+
+      - name: Verify Docker image starts
+        run: |
+          docker run -d --name test-app \
+            -p 8000:8000 \
+            -v $(pwd)/models:/app/models \
+            mlops-canary-pipeline:${{ github.sha }}
+          sleep 5
+          curl -f http://localhost:8000/health || (docker logs test-app && exit 1)
+          docker stop test-app

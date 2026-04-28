@@ -1,0 +1,63 @@
+services:
+  app:
+    build: .
+    command: uvicorn mlops_canary_pipeline.main:app --host 0.0.0.0 --port 8000
+    environment:
+      ENABLE_MLFLOW_LOGGING: "true"
+      MLFLOW_EXPERIMENT_NAME: canary-pipeline
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      MODEL_VERSION: baseline
+    volumes:
+      - ./:/app
+      - model-data:/app/models
+    ports:
+      - "8000:8000"
+    depends_on:
+      - mlflow
+
+  mlflow:
+    build: .
+    command: >
+      mlflow server
+      --host 0.0.0.0
+      --port 5000
+      --backend-store-uri sqlite:////mlflow/mlflow.db
+      --default-artifact-root /mlflow/artifacts
+    volumes:
+      - mlflow-data:/mlflow
+    ports:
+      - "5000:5000"
+
+  prometheus:
+    image: prom/prometheus:v2.52.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --web.enable-lifecycle
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/prometheus/alert_rules.yml:/etc/prometheus/alert_rules.yml:ro
+    ports:
+      - "9090:9090"
+    depends_on:
+      - app
+
+  grafana:
+    image: grafana/grafana:11.1.0
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_SECURITY_ADMIN_USER: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+
+volumes:
+  grafana-data:
+  mlflow-data:
+  model-data:
