@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -126,7 +125,7 @@ if __name__ == "__main__":
 
     df = load_dataset()
     data = preprocess(df)
-    print(f"\n✅  Preprocessing complete")
+    print("\n✅  Preprocessing complete")
     print(f"    Train : {len(data.X_train):,}  (fraud {int(data.y_train.sum()):,})")
     print(f"    Val   : {len(data.X_val):,}  (fraud {int(data.y_val.sum()):,})")
     print(f"    Test  : {len(data.X_test):,}  (fraud {int(data.y_test.sum()):,})")

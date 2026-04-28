@@ -13,7 +13,6 @@ Running this module directly writes the dataset to ``data/``:
 from __future__ import annotations
 
 import logging
-import os
 from pathlib import Path
 
 import numpy as np
