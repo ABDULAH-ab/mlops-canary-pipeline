@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import os
+import subprocess
 import time
 
 import numpy as np
@@ -81,6 +82,20 @@ CANARY_PREDICTION_LATENCY = Histogram(
 CANARY_TTD = Gauge(
     "canary_ttd_seconds",
     "Time-to-Detect degradation in seconds (research metric)",
+)
+CANARY_DRIFT = Gauge(
+    "canary_drift_score",
+    "KS drift score per model (0=no drift, 1=max drift)",
+    ["model_version"],
+)
+CANARY_FAIRNESS = Gauge(
+    "canary_fairness_index",
+    "Fairness index per model (1.0 = perfectly fair)",
+    ["model_version"],
+)
+CANARY_RETRAIN = Counter(
+    "canary_retrain_total",
+    "Total retrain events triggered by drift detection",
 )
 
 # ─── Global state ───────────────────────────────────────────────────────
@@ -247,6 +262,8 @@ def canary_status() -> dict:
         CANARY_KPI.labels(model, "recall").set(snap.recall)
         CANARY_KPI.labels(model, "f1").set(snap.f1)
         CANARY_KPI.labels(model, "latency_ms").set(snap.latency_ms_mean)
+        CANARY_DRIFT.labels(model).set(snap.drift_score)
+        CANARY_FAIRNESS.labels(model).set(snap.fairness_index)
 
     ttd = kpi_collector.ttd_seconds
     if ttd is not None:
@@ -260,6 +277,7 @@ def canary_status() -> dict:
             "baseline": kpi_collector.snapshot("baseline").__dict__,
             "candidate": kpi_collector.snapshot("candidate").__dict__,
         },
+        "drift": kpi_collector.drift_status,
         "ttd_seconds": ttd,
         "config": canary_config.to_dict(),
     }
@@ -328,3 +346,84 @@ def canary_start() -> dict:
 @app.get("/metrics")
 def metrics() -> PlainTextResponse:
     return PlainTextResponse(generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  Drift detection + Retrain (closes the full MLOps loop)
+# ═══════════════════════════════════════════════════════════════════════
+
+@app.get("/drift/status")
+def drift_status() -> dict:
+    """Return current drift detection status for both models."""
+    return kpi_collector.drift_status
+
+
+@app.post("/retrain")
+def retrain_trigger() -> dict:
+    """Trigger model retraining — closes the MLOps loop.
+
+    This can be called manually or automatically when drift is detected.
+    It re-runs the training pipeline and reloads the models.
+    """
+    logger.info("RETRAIN triggered — re-running training pipeline")
+    CANARY_RETRAIN.inc()
+
+    try:
+        # Run training as subprocess (same as CI does)
+        result = subprocess.run(
+            ["python", "-m", "mlops_canary_pipeline.training.train"],
+            capture_output=True,
+            text=True,
+            timeout=300,
+            env={**os.environ, "MLFLOW_TRACKING_URI": os.getenv("MLFLOW_TRACKING_URI", "")},
+        )
+
+        if result.returncode != 0:
+            logger.error("Retrain failed: %s", result.stderr[-500:])
+            raise HTTPException(status_code=500, detail=f"Training failed: {result.stderr[-200:]}")
+
+        # Reload models
+        router.load_models()
+        logger.info("RETRAIN complete — models reloaded")
+
+        return {
+            "status": "retrained",
+            "message": "Models retrained and reloaded successfully",
+            "stdout_tail": result.stdout[-300:],
+        }
+
+    except subprocess.TimeoutExpired:
+        raise HTTPException(status_code=504, detail="Training timed out (5min limit)")
+
+
+@app.post("/drift/check-and-retrain")
+def drift_check_and_retrain() -> dict:
+    """Check for drift and automatically retrain if detected.
+
+    This is the full MLOps loop endpoint:
+    drift detected → rollback → retrain → redeploy
+    """
+    status = kpi_collector.drift_status
+
+    if status["baseline_drift_detected"] or status["candidate_drift_detected"]:
+        # Step 1: Rollback to safe state
+        rollback_controller.manual_rollback(router, reason="Drift detected — auto-retrain")
+        CANARY_ROLLBACK.inc()
+        CANARY_TRAFFIC_PCT.set(0)
+
+        # Step 2: Retrain
+        retrain_result = retrain_trigger()
+
+        return {
+            "drift_detected": True,
+            "action": "rollback + retrain",
+            "drift_scores": status,
+            "retrain": retrain_result,
+        }
+
+    return {
+        "drift_detected": False,
+        "action": "none",
+        "drift_scores": status,
+        "message": "No drift detected — models are stable",
+    }

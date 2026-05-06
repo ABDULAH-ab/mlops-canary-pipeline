@@ -55,6 +55,8 @@ class KPISnapshot:
     latency_ms_mean: float = 0.0
     latency_ms_p95: float = 0.0
     fairness_index: float = 0.0
+    drift_score: float = 0.0       # KS statistic (0=no drift, 1=max drift)
+    drift_detected: bool = False   # True if drift_score > threshold
 
 
 # ---------------------------------------------------------------------------
@@ -82,6 +84,10 @@ class KPICollector:
         # TTD tracking
         self._degradation_injected_at: float | None = None
         self._degradation_detected_at: float | None = None
+
+        # Drift detection: store reference distribution from first window
+        self._reference_predictions: np.ndarray | None = None
+        self._drift_threshold = 0.1  # KS statistic threshold
 
     # ------------------------------------------------------------------
     # Ingestion
@@ -125,6 +131,24 @@ class KPICollector:
         recall = tp / max(tp + fn, 1)
         f1 = 2 * precision * recall / max(precision + recall, 1e-9)
 
+        # Fairness index — Equality of Opportunity proxy
+        # Measures how equally the model treats positive-class predictions
+        # across the first and second half of the window (simulates subgroups)
+        mid = len(y_pred) // 2
+        if mid > 5:
+            recall_a = int(((y_pred[:mid] == 1) & (y_true[:mid] == 1)).sum()) / max(
+                int((y_true[:mid] == 1).sum()), 1
+            )
+            recall_b = int(((y_pred[mid:] == 1) & (y_true[mid:] == 1)).sum()) / max(
+                int((y_true[mid:] == 1).sum()), 1
+            )
+            fairness = 1.0 - abs(recall_a - recall_b)  # 1.0 = perfectly fair
+        else:
+            fairness = 1.0
+
+        # Drift detection — KS test on prediction probabilities
+        drift_score, drift_detected = self._detect_drift(model_version)
+
         return KPISnapshot(
             n_samples=len(labelled),
             precision=round(precision, 4),
@@ -132,7 +156,9 @@ class KPICollector:
             f1=round(f1, 4),
             latency_ms_mean=round(float(latencies.mean()), 3) if len(latencies) else 0.0,
             latency_ms_p95=round(float(np.percentile(latencies, 95)), 3) if len(latencies) else 0.0,
-            fairness_index=1.0,  # simplified — full fairness requires subgroup labels
+            fairness_index=round(fairness, 4),
+            drift_score=round(drift_score, 4),
+            drift_detected=drift_detected,
         )
 
     # ------------------------------------------------------------------
@@ -323,3 +349,57 @@ class KPICollector:
     @property
     def candidate_count(self) -> int:
         return len(self._candidate_samples)
+
+    # ------------------------------------------------------------------
+    # Drift detection  (fills gap: "drift detection the paper discusses
+    #                    but does not fully implement")
+    # ------------------------------------------------------------------
+
+    def _detect_drift(self, model_version: str) -> tuple[float, bool]:
+        """Kolmogorov-Smirnov test for prediction distribution drift.
+
+        Compares the current window of prediction probabilities against
+        a reference distribution captured from the first stable window.
+        Returns (ks_statistic, is_drifted).
+        """
+        buf = self._candidate_samples if model_version == "candidate" else self._baseline_samples
+        current_probs = np.array([s.probability for s in buf if s.probability > 0])
+
+        if len(current_probs) < self.config.min_sample_size:
+            return 0.0, False
+
+        # Capture reference distribution on first call
+        if self._reference_predictions is None:
+            self._reference_predictions = current_probs.copy()
+            logger.info("Drift: captured reference distribution (%d samples)", len(current_probs))
+            return 0.0, False
+
+        # KS test: current vs reference
+        ks_stat, p_value = stats.ks_2samp(self._reference_predictions, current_probs)
+        drifted = ks_stat > self._drift_threshold
+
+        if drifted:
+            logger.warning(
+                "DRIFT DETECTED: KS=%.4f (threshold=%.2f), p=%.6f",
+                ks_stat, self._drift_threshold, p_value,
+            )
+
+        return float(ks_stat), drifted
+
+    def set_reference_distribution(self, probs: np.ndarray) -> None:
+        """Manually set the reference distribution for drift detection."""
+        self._reference_predictions = probs.copy()
+        logger.info("Drift: reference distribution set (%d samples)", len(probs))
+
+    @property
+    def drift_status(self) -> dict:
+        """Return current drift detection status."""
+        b_snap = self.snapshot("baseline")
+        c_snap = self.snapshot("candidate")
+        return {
+            "baseline_drift_score": b_snap.drift_score,
+            "baseline_drift_detected": b_snap.drift_detected,
+            "candidate_drift_score": c_snap.drift_score,
+            "candidate_drift_detected": c_snap.drift_detected,
+            "reference_distribution_size": len(self._reference_predictions) if self._reference_predictions is not None else 0,
+        }
