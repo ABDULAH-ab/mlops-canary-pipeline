@@ -9,7 +9,6 @@ services:
       MODEL_VERSION: baseline
     volumes:
       - ./:/app
-      - model-data:/app/models
     ports:
       - "8000:8000"
     depends_on:
@@ -60,4 +59,3 @@ services:
 volumes:
   grafana-data:
   mlflow-data:
-  model-data:

@@ -141,7 +141,14 @@ def run_training_pipeline() -> dict:
     # --- MLflow setup ---
     try:
         mlflow.set_tracking_uri(_tracking_uri())
-        mlflow.set_experiment(_experiment_name())
+        exp_name = _experiment_name()
+        # Handle deleted experiments
+        existing = mlflow.get_experiment_by_name(exp_name)
+        if existing and existing.lifecycle_stage == "deleted":
+            client = mlflow.MlflowClient()
+            client.restore_experiment(existing.experiment_id)
+            logger.info("Restored deleted MLflow experiment '%s'", exp_name)
+        mlflow.set_experiment(exp_name)
         mlflow_ok = True
         logger.info("MLflow tracking at %s", _tracking_uri())
     except Exception as exc:
@@ -174,7 +181,6 @@ def run_training_pipeline() -> dict:
                     mlflow.log_metric(f"test_{k}", v)
                 mlflow.set_tag("model_type", "xgboost")
                 mlflow.set_tag("role", "baseline")
-                mlflow.sklearn.log_model(model, "model")
 
         logger.info("  val_f1=%.4f  val_precision=%.4f  val_recall=%.4f",
                      val_metrics["f1"], val_metrics["precision"], val_metrics["recall"])
@@ -211,7 +217,6 @@ def run_training_pipeline() -> dict:
                     mlflow.log_metric(f"test_{k}", v)
                 mlflow.set_tag("model_type", "lightgbm")
                 mlflow.set_tag("role", "candidate")
-                mlflow.sklearn.log_model(model, "model")
 
         logger.info("  val_f1=%.4f  val_precision=%.4f  val_recall=%.4f",
                      val_metrics["f1"], val_metrics["precision"], val_metrics["recall"])

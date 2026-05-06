@@ -384,7 +384,7 @@ class KPICollector:
                 ks_stat, self._drift_threshold, p_value,
             )
 
-        return float(ks_stat), drifted
+        return float(ks_stat), bool(drifted)
 
     def set_reference_distribution(self, probs: np.ndarray) -> None:
         """Manually set the reference distribution for drift detection."""
