@@ -254,7 +254,10 @@ def main():
 
     show_kpi_comparison()
     log("\n⚖️  Running KPI evaluation...")
-    show_decision()
+    res = show_decision()
+    if res.get("action") == "rollback":
+        log("\n🛑 Demo aborted: Candidate model failed KPIs and was rolled back.")
+        return finish_demo()
     wait_for_enter("Ready to increase to 25%? Press Enter...")
 
     # ── Phase 3: Advance to 25% ─────────────────────────────────────
@@ -267,7 +270,10 @@ def main():
 
     show_kpi_comparison()
     log("\n⚖️  Running KPI evaluation...")
-    show_decision()
+    res = show_decision()
+    if res.get("action") == "rollback":
+        log("\n🛑 Demo aborted: Candidate model failed KPIs and was rolled back.")
+        return finish_demo()
     wait_for_enter("Ready to increase to 50%? Press Enter...")
 
     # ── Phase 4: Advance to 50% ─────────────────────────────────────
@@ -279,7 +285,10 @@ def main():
 
     show_kpi_comparison()
     log("\n⚖️  Running KPI evaluation...")
-    show_decision()
+    res = show_decision()
+    if res.get("action") == "rollback":
+        log("\n🛑 Demo aborted: Candidate model failed KPIs and was rolled back.")
+        return finish_demo()
     wait_for_enter("Ready to go to 100% (full promotion)? Press Enter...")
 
     # ── Phase 5: Full promotion or rollback ──────────────────────────
@@ -293,6 +302,10 @@ def main():
     log("\n⚖️  Final KPI evaluation...")
     show_decision()
 
+    finish_demo()
+
+
+def finish_demo():
     # ── Phase 6: Drift check ─────────────────────────────────────────
     log_header("PHASE 6: Drift Detection Check")
     drift = api_get("/drift/status")
