@@ -18,28 +18,36 @@ Requires the app to be running:
 from __future__ import annotations
 
 import json
-import random
 import sys
 import time
 
 import requests
 
 BASE_URL = "http://localhost:8000"
-N_NORMAL_REQUESTS = 60      # normal traffic phase
-N_CANARY_REQUESTS = 100     # canary traffic phase
+N_NORMAL_REQUESTS = 80      # normal traffic phase
+N_CANARY_REQUESTS = 200     # canary traffic phase
 
 
 def log(msg: str) -> None:
     print(f"[{time.strftime('%H:%M:%S')}] {msg}")
 
 
-def random_features() -> list[float]:
-    """Generate a random 29-feature vector."""
-    return [round(random.gauss(0, 1), 3) for _ in range(28)] + [round(random.uniform(1, 500), 2)]
+def load_real_test_data() -> tuple[list[list[float]], list[int]]:
+    """Load REAL test data so models produce meaningful predictions."""
+    log("  Loading real fraud detection test data...")
+    from mlops_canary_pipeline.data.ingest import load_dataset
+    from mlops_canary_pipeline.data.preprocess import preprocess
+
+    df = load_dataset()
+    data = preprocess(df, apply_smote=False)
+    features = data.X_test.tolist()
+    labels = data.y_test.tolist()
+    n_fraud = sum(labels)
+    log(f"  Loaded {len(features)} test samples ({n_fraud} fraud, {len(features) - n_fraud} legit)")
+    return features, labels
 
 
-def send_prediction(features: list[float] | None = None) -> dict:
-    features = features or random_features()
+def send_prediction(features: list[float]) -> dict:
     r = requests.post(f"{BASE_URL}/predict", json={"features": features}, timeout=10)
     r.raise_for_status()
     return r.json()
@@ -75,7 +83,7 @@ def main() -> None:
     log("=" * 60)
 
     # ------------------------------------------------------------------
-    # Step 0: Health check
+    # Step 0: Health check + data loading
     # ------------------------------------------------------------------
     log("\n📡 Step 0: Health check")
     try:
@@ -86,15 +94,17 @@ def main() -> None:
         log(f"  Error: {e}")
         sys.exit(1)
 
+    test_features, test_labels = load_real_test_data()
+    idx = 0  # index into test data
+
     # ------------------------------------------------------------------
     # Step 1: Normal traffic (baseline only)
     # ------------------------------------------------------------------
     log(f"\n📊 Step 1: Sending {N_NORMAL_REQUESTS} normal requests (baseline only)")
     for i in range(N_NORMAL_REQUESTS):
-        result = send_prediction()
-        # Send ground truth (simulate: 2% fraud rate)
-        gt = 1 if random.random() < 0.02 else 0
-        send_feedback(gt, result["model_version"])
+        result = send_prediction(test_features[idx % len(test_features)])
+        send_feedback(test_labels[idx % len(test_labels)], result["model_version"])
+        idx += 1
 
         if (i + 1) % 20 == 0:
             log(f"  Sent {i+1}/{N_NORMAL_REQUESTS} requests")
@@ -124,14 +134,12 @@ def main() -> None:
     log(f"\n🔄 Step 4: Sending {N_CANARY_REQUESTS} canary requests (mixed traffic)")
     model_counts = {"baseline": 0, "candidate": 0}
     for i in range(N_CANARY_REQUESTS):
-        result = send_prediction()
+        result = send_prediction(test_features[idx % len(test_features)])
         model_counts[result["model_version"]] = model_counts.get(result["model_version"], 0) + 1
+        send_feedback(test_labels[idx % len(test_labels)], result["model_version"])
+        idx += 1
 
-        # Send ground truth
-        gt = 1 if random.random() < 0.02 else 0
-        send_feedback(gt, result["model_version"])
-
-        if (i + 1) % 25 == 0:
+        if (i + 1) % 50 == 0:
             log(f"  Sent {i+1}/{N_CANARY_REQUESTS} — "
                 f"baseline: {model_counts['baseline']}, candidate: {model_counts['candidate']}")
 

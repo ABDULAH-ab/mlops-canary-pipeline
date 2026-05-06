@@ -1,10 +1,7 @@
 """Interactive Live Demo — Watch the canary pipeline in real-time.
 
-This script lets you:
-  1. Send continuous traffic while watching Grafana/Prometheus
-  2. Press Enter to advance canary stages (5% → 25% → 50% → 100%)
-  3. See KPI comparisons update live in the terminal
-  4. Watch the Decision Engine promote or rollback automatically
+Uses REAL test data from the fraud dataset (not random noise) so
+both models produce meaningful predictions and KPI comparisons.
 
 HOW TO USE:
   1. Open 3 browser tabs:
@@ -14,14 +11,10 @@ HOW TO USE:
   2. Run this script:
      python -m mlops_canary_pipeline.live_demo
   3. Follow the prompts — press Enter to advance stages
-
-The script sends traffic continuously so you can watch
-dashboards update in real-time.
 """
 
 from __future__ import annotations
 
-import random
 import sys
 import threading
 import time
@@ -34,6 +27,8 @@ BASE_URL = "http://localhost:8000"
 _stop_traffic = threading.Event()
 _traffic_stats = {"total": 0, "baseline": 0, "candidate": 0, "errors": 0}
 _lock = threading.Lock()
+_test_features: list[list[float]] = []
+_test_labels: list[int] = []
 
 
 def log(msg: str) -> None:
@@ -44,14 +39,6 @@ def log_header(msg: str) -> None:
     print(f"\n\033[1;33m{'═' * 60}\033[0m")
     print(f"\033[1;33m  {msg}\033[0m")
     print(f"\033[1;33m{'═' * 60}\033[0m\n")
-
-
-def log_kpi(label: str, value, color: str = "32") -> None:
-    print(f"  \033[{color}m{label:<25}\033[0m {value}")
-
-
-def random_features() -> list[float]:
-    return [round(random.gauss(0, 1), 3) for _ in range(28)] + [round(random.uniform(1, 500), 2)]
 
 
 def api_get(path: str) -> dict:
@@ -66,41 +53,66 @@ def api_post(path: str) -> dict:
     return r.json()
 
 
+def load_real_test_data():
+    """Load the REAL preprocessed test data so models get meaningful input."""
+    log("Loading real fraud detection test data...")
+    from mlops_canary_pipeline.data.ingest import load_dataset
+    from mlops_canary_pipeline.data.preprocess import preprocess
+
+    df = load_dataset()
+    data = preprocess(df, apply_smote=False)
+
+    # Use test set features and labels
+    global _test_features, _test_labels
+    _test_features = data.X_test.tolist()
+    _test_labels = data.y_test.tolist()
+
+    n_fraud = sum(_test_labels)
+    log(f"  Loaded {len(_test_features)} test samples ({n_fraud} fraud, "
+        f"{len(_test_features) - n_fraud} legit)")
+
+
 # ── Background traffic sender ───────────────────────────────────────────
 def _traffic_worker(requests_per_sec: float = 5.0):
-    """Sends traffic continuously in the background."""
+    """Sends REAL test data continuously in the background."""
     interval = 1.0 / requests_per_sec
+    idx = 0
+    n = len(_test_features)
+
     while not _stop_traffic.is_set():
         try:
-            features = random_features()
+            # Pick a real test sample (cycle through dataset)
+            features = _test_features[idx % n]
+            gt = _test_labels[idx % n]
+            idx += 1
+
             r = requests.post(
                 f"{BASE_URL}/predict",
                 json={"features": features},
                 timeout=5,
             )
-            data = r.json()
-            # Send ground truth feedback (2% fraud rate)
-            gt = 1 if random.random() < 0.02 else 0
+            result = r.json()
+
+            # Send REAL ground truth (not random)
             requests.post(
                 f"{BASE_URL}/feedback",
-                json={"ground_truth": gt, "model_version": data["model_version"]},
+                json={"ground_truth": gt, "model_version": result["model_version"]},
                 timeout=5,
             )
             with _lock:
                 _traffic_stats["total"] += 1
-                _traffic_stats[data["model_version"]] += 1
+                _traffic_stats[result["model_version"]] += 1
         except Exception:
             with _lock:
                 _traffic_stats["errors"] += 1
         time.sleep(interval)
 
 
-def start_traffic(rps: float = 5.0) -> threading.Thread:
+def start_traffic(rps: float = 5.0) -> None:
     _stop_traffic.clear()
     t = threading.Thread(target=_traffic_worker, args=(rps,), daemon=True)
     t.start()
-    log(f"📡 Background traffic started ({rps} req/sec)")
-    return t
+    log(f"📡 Background traffic started ({rps} req/sec, using real test data)")
 
 
 def stop_traffic():
@@ -140,7 +152,6 @@ def show_kpi_comparison():
         bv = b.get(metric, 0)
         cv = c.get(metric, 0)
         delta = round(cv - bv, 4) if isinstance(bv, (int, float)) and isinstance(cv, (int, float)) else "—"
-        # Color: green if candidate better, red if worse (for higher_better metrics)
         if metric in ("precision", "recall", "f1", "fairness_index"):
             color = "32" if cv >= bv else "31"
         elif metric == "latency_ms_mean":
@@ -163,17 +174,17 @@ def show_decision():
         result = api_post("/canary/evaluate")
     except Exception as e:
         log(f"  ⚠️  Evaluation failed: {e}")
-        return result if 'result' in dir() else {}
+        return {}
 
     action = result["action"]
     if action == "promote":
-        color = "32"  # green
+        color = "32"
         icon = "🟢"
     elif action == "rollback":
-        color = "31"  # red
+        color = "31"
         icon = "🔴"
     else:
-        color = "33"  # yellow
+        color = "33"
         icon = "🟡"
 
     log(f"{icon} Decision: \033[1;{color}m{action.upper()}\033[0m")
@@ -187,6 +198,14 @@ def show_decision():
 def wait_for_enter(msg: str = "Press Enter to continue..."):
     print(f"\n\033[1;35m  ⏸  {msg}\033[0m", end="", flush=True)
     input()
+
+
+def wait_and_collect(seconds: int = 18, interval: int = 3):
+    """Send traffic for a period, printing stats every interval."""
+    rounds = seconds // interval
+    for _ in range(rounds):
+        time.sleep(interval)
+        show_traffic_stats()
 
 
 # ── Main demo flow ──────────────────────────────────────────────────────
@@ -206,15 +225,16 @@ def main():
         log("   Run: docker compose up --build -d")
         sys.exit(1)
 
+    # Load REAL test data
+    load_real_test_data()
+
     # ── Phase 1: Baseline traffic ────────────────────────────────────
     log_header("PHASE 1: Baseline Traffic (no canary)")
-    log("Sending traffic to baseline model only...")
+    log("Sending REAL test data to baseline model only...")
     log("👀 Watch Grafana — you'll see request rate increase")
 
-    start_traffic(rps=8)
-    for i in range(5):
-        time.sleep(3)
-        show_traffic_stats()
+    start_traffic(rps=10)
+    wait_and_collect(seconds=15)
 
     show_kpi_comparison()
     wait_for_enter("Ready to start canary? Press Enter...")
@@ -224,10 +244,9 @@ def main():
     result = api_post("/canary/start")
     log(f"🚀 Canary started! {result['canary_pct']}% → candidate model")
     log("👀 Watch Grafana — Traffic Split gauge should show 5%")
+    log("⏳ Collecting data for candidate model...")
 
-    for i in range(5):
-        time.sleep(3)
-        show_traffic_stats()
+    wait_and_collect(seconds=24)
 
     show_kpi_comparison()
     log("\n⚖️  Running KPI evaluation...")
@@ -240,9 +259,7 @@ def main():
     log(f"📈 Traffic increased to {result['canary_pct']}%")
     log("👀 Watch Grafana — more candidate data appearing")
 
-    for i in range(6):
-        time.sleep(3)
-        show_traffic_stats()
+    wait_and_collect(seconds=24)
 
     show_kpi_comparison()
     log("\n⚖️  Running KPI evaluation...")
@@ -254,9 +271,7 @@ def main():
     result = api_post("/canary/start")
     log(f"📈 Traffic increased to {result['canary_pct']}%")
 
-    for i in range(6):
-        time.sleep(3)
-        show_traffic_stats()
+    wait_and_collect(seconds=24)
 
     show_kpi_comparison()
     log("\n⚖️  Running KPI evaluation...")
@@ -268,9 +283,7 @@ def main():
     result = api_post("/canary/start")
     log(f"📈 Traffic at {result['canary_pct']}%")
 
-    for i in range(6):
-        time.sleep(3)
-        show_traffic_stats()
+    wait_and_collect(seconds=24)
 
     show_kpi_comparison()
     log("\n⚖️  Final KPI evaluation...")
