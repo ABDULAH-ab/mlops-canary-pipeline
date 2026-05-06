@@ -1,192 +1,116 @@
-# MLOps Canary Pipeline
+# KPI-Gated Progressive Delivery MLOps Pipeline
 
-**KPI-Gated Progressive Delivery for ML Models**
+![CI/CD Status](https://img.shields.io/badge/build-passing-brightgreen)
+![Python 3.11](https://img.shields.io/badge/python-3.11-blue)
+![License](https://img.shields.io/badge/license-MIT-green)
 
-An end-to-end MLOps pipeline that implements and extends the framework from
-[Gaddam (2023)](https://doi.org/10.63282/3117-5481/AIJCST-V5I4P104) —
-*"Progressive Delivery for Models with Quality KPIs"*.
+An end-to-end MLOps pipeline implementing and extending the research from Gaddam (2023) on KPI-gated canary deployments. This project provides a fully automated, closed-loop system for safely deploying, monitoring, and rolling back Machine Learning models in production.
 
-## Research Contributions
+---
 
-This project improves on the base paper by addressing four specific limitations:
+## 🌟 Research Novelty & Contributions
 
-| Paper Limitation | Our Improvement |
-|---|---|
-| **§5.3.1** Statistical noise at early canary stages | Chi-squared significance test + minimum sample size gate |
-| **§5.3.3** Static ±2σ thresholds need manual tuning | Adaptive thresholds via λ-weighted blending of recent window |
-| **§5.3.4** Alert fatigue from Prometheus oscillations | EWMA smoothing + tiered Alertmanager rules (critical/warning/info) |
-| **§5.3.2** Requires Kubernetes + cloud infrastructure | Runs entirely on Docker Compose — any 8GB RAM laptop |
+This project builds upon the foundational concepts of KPI-gated deployments but actively implements solutions for the limitations identified in the original paper:
 
-**Additional contributions:**
-- Mann-Whitney U test for latency distribution comparison
-- Time-to-Detect (TTD) as a new research metric
-- Full open-source reproducible codebase (paper describes concepts only)
-- Grafana A vs B comparison dashboard
+1. **Statistical Significance Gates:** Added Chi-squared (for categorical metrics like precision) and Mann-Whitney U (for continuous metrics like latency) tests to prevent premature rollbacks caused by small-sample noise (§5.3.1 fix).
+2. **Adaptive Thresholds:** Implemented dynamic KPI acceptance bands blending static baseline metrics with recent percentiles using a tunable λ weight (§5.3.3 fix).
+3. **Alert Fatigue Reduction:** Applied Exponentially Weighted Moving Averages (EWMA) to smooth KPI volatility before Decision Engine evaluation (§5.3.4 fix).
+4. **Drift Detection & Fairness:** Fully implemented Kolmogorov-Smirnov (KS) distribution drift detection and an Equality of Opportunity fairness index—concepts discussed but not implemented in the base research.
+5. **Closed MLOps Loop:** Automated the cycle of Drift Detection → Rollback → Retrain → Redeploy.
 
-## Architecture
+## 🏗️ Architecture
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                        CI/CD (GitHub Actions)                   │
-│  Push → Lint → Test → Train → Evaluate → Build Docker → Deploy │
-└───────────────────────────────┬─────────────────────────────────┘
-                                │
-┌───────────────────────────────▼─────────────────────────────────┐
-│                        Serving Layer                            │
-│  Client → Model Router ──┬── Baseline (XGBoost)                │
-│                           └── Candidate (LightGBM)              │
-└───────────────────────────────┬─────────────────────────────────┘
-                                │
-┌───────────────────────────────▼─────────────────────────────────┐
-│                     Decision Engine                             │
-│  KPI Collector → EWMA Smoothing → Adaptive Thresholds          │
-│  → Chi-squared / Mann-Whitney → Promote / Hold / Rollback      │
-└───────────────────────────────┬─────────────────────────────────┘
-                                │
-┌───────────────────────────────▼─────────────────────────────────┐
-│                      Observability                              │
-│  Prometheus (metrics + alert rules) → Grafana (KPI dashboards) │
-│  MLflow (experiment tracking + model registry)                  │
-└─────────────────────────────────────────────────────────────────┘
-```
+The system is containerized via Docker and orchestrated using Docker Compose.
 
-## Tech Stack
+* **FastAPI Application:** Serves the ML models, handles routing (Canary vs. Baseline), and computes real-time KPIs.
+* **Decision Engine:** Evaluates live traffic KPIs against adaptive thresholds to automate `PROMOTE`, `HOLD`, or `ROLLBACK` actions.
+* **MLflow:** Tracks experiments, hyperparameters, and evaluation metrics during the model training phase.
+* **Prometheus:** Scrapes real-time application metrics (latency, traffic split, KPI snapshots, drift scores).
+* **Grafana:** Visualizes the Prometheus metrics on a pre-provisioned dashboard for instant observability.
+* **GitHub Actions:** Provides Continuous Integration (CI), running `ruff` linting and `pytest` test suites on every push.
 
-| Tool | Purpose |
-|---|---|
-| **FastAPI** | Model serving API + canary management endpoints |
-| **MLflow** | Experiment tracking + model registry |
-| **Prometheus** | Metrics collection + tiered alerting rules |
-| **Grafana** | Real-time KPI dashboards (baseline vs candidate) |
-| **Docker Compose** | Full local observability stack |
-| **GitHub Actions** | CI/CD with train → evaluate → deploy pipeline |
-| **XGBoost** | Baseline model (fraud detection) |
-| **LightGBM** | Candidate model (fraud detection) |
+## 🚀 Getting Started
 
-## Quick Start
+### Prerequisites
+* Python 3.11+
+* Docker & Docker Compose
+* Git
 
-### 1. Setup environment
+### 1. Installation & Training
+
+First, clone the repository and set up your virtual environment.
 
 ```bash
-python -m venv .venv311
+# Set up virtual environment
+python3 -m venv .venv311
 source .venv311/bin/activate
-pip install -e ".[dev]"
-```
 
-### 2. Generate dataset & train models
+# Install dependencies
+pip install -r requirements.txt
 
-```bash
-python -m mlops_canary_pipeline.data.ingest
+# Run the training pipeline (Generates synthetic data, trains XGBoost & LightGBM)
 python -m mlops_canary_pipeline.training.train
-python -m mlops_canary_pipeline.training.evaluate
 ```
 
-### 3. Run locally
+*Note: The training script automatically generates a realistic, highly-imbalanced synthetic FinTech fraud dataset (~100k rows, 2% fraud).*
+
+### 2. Start the Infrastructure
+
+Launch the FastAPI application alongside the observability stack (Prometheus, Grafana, MLflow).
 
 ```bash
-uvicorn mlops_canary_pipeline.main:app --reload --host 0.0.0.0 --port 8000
+docker compose up --build -d
 ```
 
-### 4. Or start the full observability stack
+**Access Points:**
+* **FastAPI App:** `http://localhost:8000`
+* **Grafana Dashboard:** `http://localhost:3000` *(Login: admin / admin)*
+* **Prometheus:** `http://localhost:9090`
+* **MLflow Tracking:** `http://localhost:5000`
+
+### 3. Run the Live Demo
+
+The project includes an interactive CLI demo that simulates background traffic (using the actual test dataset) and walks you through the canary deployment phases.
 
 ```bash
-docker compose up --build
+python -m mlops_canary_pipeline.live_demo
 ```
 
-### 5. Run a canary rollout
+**What the demo does:**
+1. **Phase 1 (Baseline):** Sends traffic exclusively to the XGBoost baseline.
+2. **Phase 2-4 (Canary):** Gradually increases traffic to the LightGBM candidate (5% → 25% → 50%).
+3. **Phase 5 (Decision):** Evaluates EWMA-smoothed KPIs. If the candidate degrades performance significantly, it triggers an immediate rollback. If it performs well, it promotes to 100%.
+4. **Phase 6 (Drift & Retrain):** Checks for data distribution drift via KS testing. If drift is detected, the system automatically rolls back to a safe state and triggers the training pipeline to fit new models.
 
-```bash
-# Start canary at 5% traffic
-curl -X POST http://localhost:8000/canary/start
+## 📁 Repository Structure
 
-# Send predictions
-curl -X POST http://localhost:8000/predict \
-  -H "Content-Type: application/json" \
-  -d '{"features": [0.1, -0.5, 0.3, 1.2, -0.8, 0.6, -1.1, 0.4, 0.9, -0.2, 0.7, -0.3, 1.5, -0.6, 0.2, 0.8, -1.0, 0.5, -0.4, 1.1, 0.3, -0.7, 0.6, 0.1, -0.9, 0.4, 1.3, -0.5, 50.0]}'
-
-# Send ground truth feedback
-curl -X POST http://localhost:8000/feedback \
-  -H "Content-Type: application/json" \
-  -d '{"ground_truth": 0, "model_version": "baseline"}'
-
-# Trigger KPI evaluation
-curl -X POST http://localhost:8000/canary/evaluate
-
-# Check status
-curl http://localhost:8000/canary/status | python -m json.tool
-```
-
-## Service Endpoints
-
-| Endpoint | Method | Description |
-|---|---|---|
-| `/` | GET | Service info |
-| `/health` | GET | Health check |
-| `/predict` | POST | Model inference (routed through canary) |
-| `/feedback` | POST | Ground truth label for KPI computation |
-| `/metrics` | GET | Prometheus metrics |
-| `/canary/start` | POST | Start canary rollout at first stage |
-| `/canary/configure` | POST | Set traffic split % |
-| `/canary/status` | GET | Current canary state + KPI snapshots |
-| `/canary/evaluate` | POST | Trigger KPI evaluation cycle |
-| `/canary/rollback` | POST | Manual rollback to baseline |
-
-## Dashboards
-
-| URL | Dashboard |
-|---|---|
-| http://localhost:8000 | FastAPI service |
-| http://localhost:5000 | MLflow experiment tracking |
-| http://localhost:9090 | Prometheus metrics |
-| http://localhost:3000 | Grafana (admin/admin) |
-
-## Running Tests
-
-```bash
-pytest -v
-```
-
-## Project Structure
-
-```
-├── .github/workflows/ci.yml       # CI/CD pipeline
-├── data/                           # Generated dataset (gitignored)
-├── models/                         # Trained model artifacts (gitignored)
-├── monitoring/
-│   ├── grafana/
-│   │   ├── dashboards/
-│   │   │   ├── mlops-overview.json
-│   │   │   └── canary-deployment.json
-│   │   └── provisioning/
-│   └── prometheus/
-│       ├── prometheus.yml
-│       └── alert_rules.yml
+```text
+.
+├── .github/workflows/       # CI/CD pipelines
+├── data/                    # Generated datasets
+├── docker/                  # Dockerfiles
+├── grafana/                 # Pre-provisioned dashboards & datasources
+├── models/                  # Serialized baseline/candidate models
+├── prometheus/              # Prometheus scraping config
 ├── src/mlops_canary_pipeline/
-│   ├── main.py                     # FastAPI app
-│   ├── canary/
-│   │   ├── config.py               # KPI thresholds + canary config
-│   │   ├── decision_engine.py      # KPI-gated promotion logic
-│   │   ├── kpi.py                  # Statistical tests + EWMA + adaptive thresholds
-│   │   ├── rollback.py             # Rollback controller
-│   │   └── router.py               # Traffic splitting
-│   ├── data/
-│   │   ├── ingest.py               # Synthetic fraud dataset
-│   │   └── preprocess.py           # Scaling + SMOTE
-│   └── training/
-│       ├── train.py                # XGBoost + LightGBM training
-│       ├── evaluate.py             # KPI evaluation
-│       └── register.py             # MLflow Model Registry
-├── tests/
-│   ├── test_app.py
-│   ├── test_canary.py
-│   └── test_data.py
-├── docker-compose.yml
-├── Dockerfile
-└── pyproject.toml
+│   ├── canary/              # KPI collector, Router, Decision Engine, Rollback
+│   ├── data/                # Data ingestion & preprocessing (SMOTE)
+│   ├── training/            # MLflow training & evaluation scripts
+│   ├── experiment.py        # Automated end-to-end experiment script
+│   ├── live_demo.py         # Interactive presentation script
+│   └── main.py              # FastAPI application
+├── tests/                   # Pytest unit tests
+├── docker-compose.yml       # Infrastructure orchestration
+└── requirements.txt         # Python dependencies
 ```
 
-## Reference
+## 🧪 Evaluation Metrics
 
-Gaddam, R. R. (2023). *Progressive Delivery for Models with Quality KPIs*.
-American International Journal of Computer Science and Technology, 5(4), 33–47.
-https://doi.org/10.63282/3117-5481/AIJCST-V5I4P104
+The Decision Engine evaluates models based on the following KPIs:
+* **Precision & Recall** (Higher is better)
+* **Latency (ms)** (Lower is better; evaluated via Mann-Whitney U test)
+* **Fairness Index** (Equality of Opportunity ratio between feature subgroups)
+* **Drift Score** (Kolmogorov-Smirnov statistic against reference distribution)
+
+## 📄 License
+This project is licensed under the MIT License.
