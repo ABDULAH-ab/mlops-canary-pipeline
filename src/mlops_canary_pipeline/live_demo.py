@@ -225,6 +225,10 @@ def main():
         log("   Run: docker compose up --build -d")
         sys.exit(1)
 
+    # Reset all state from any previous run
+    reset = api_post("/canary/reset")
+    log(f"🔄 {reset['message']}")
+
     # Load REAL test data
     load_real_test_data()
 

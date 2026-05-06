@@ -339,6 +339,33 @@ def canary_start() -> dict:
     }
 
 
+@app.post("/canary/reset")
+def canary_reset() -> dict:
+    """Reset all canary state for a fresh demo run.
+
+    Resets the router (traffic back to 0% baseline), clears the KPI
+    collector buffers, and wipes the decision engine history.
+    """
+    global kpi_collector, decision_engine
+
+    # Reset router to baseline-only
+    router.rollback()
+    CANARY_TRAFFIC_PCT.set(0)
+
+    # Fresh KPI collector (clears all sample buffers + drift reference)
+    kpi_collector = KPICollector(config=canary_config)
+
+    # Fresh decision engine pointing at the new collector
+    decision_engine = DecisionEngine(collector=kpi_collector, config=canary_config)
+
+    logger.info("RESET — all canary state cleared for fresh demo")
+    return {
+        "status": "reset",
+        "canary_pct": 0,
+        "message": "Router, KPI collector, and decision engine reset",
+    }
+
+
 # ═══════════════════════════════════════════════════════════════════════
 #  Prometheus metrics endpoint
 # ═══════════════════════════════════════════════════════════════════════
